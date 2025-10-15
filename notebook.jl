@@ -39,6 +39,9 @@ begin
 end
 
 
+# ╔═╡ 47a5b8b4-11c8-460f-a91e-a6e05f912ea6
+using Logging
+
 # ╔═╡ 791e27f0-a9f0-11f0-91ec-7b09a9a9c617
 md"""
 
@@ -86,7 +89,105 @@ end
 describe(img)
 
 # ╔═╡ d09bebca-7acf-4cea-b873-067844cd84a9
+"""
+    ColorView(; color=RGB, low=0.02, high=0.98, cname="RGB")
 
+Creates a reusable GeoStats.jl transform for color visualization.
+
+This function is necessary because raw sensor data (e.g., from a drone or satellite)
+often has a wide dynamic range (e.g., 12-bit or 16-bit integers) that cannot be displayed
+directly on a screen. This transform replicates the common "contrast stretch"
+seen in GIS software like QGIS.
+
+It first performs a percentile stretch using `LowHigh` and then converts the
+normalized R, G, B channels into a single color column.
+
+# Parameters
+- `color`: The function to use for creating a color object. Defaults to `RGB`.
+- `low`: The lower percentile for the contrast stretch. Defaults to `0.02` (2nd percentile).
+- `high`: The upper percentile for the contrast stretch. Defaults to `0.98` (98th percentile).
+- `cname`: The name of the final output color column. Defaults to `"RGB"`.
+
+Setting `low=0.0` and `high=1.0` will perform a full stretch between the absolute
+minimum and maximum values of the data.
+"""
+ColorView(; color=RGB, low=0.02, high=0.98, cname="RGB") = 
+    LowHigh(; low, high) → Map(color => cname)
+
+
+# ╔═╡ f696ca04-42bd-4c79-a469-5644fd0574d2
+# Create the default 2%-98% contrast stretch transform.
+processed_image = img |> ColorView()
+
+# ╔═╡ 4e7f15bf-74e3-40e5-a66a-1ed4b41cbc7f
+processed_image |> viewer
+
+# ╔═╡ 2b47670e-46d7-491f-89ab-924599eb136b
+# Or you can create a transform for a full min-to-max stretch.
+full_range_image = img |> ColorView(low=0.0, high=1.0)
+
+# ╔═╡ b34b67e4-0dd8-453c-a1d6-cef1be0786aa
+full_range_image |> viewer
+
+# ╔═╡ 9519e9fc-2345-4deb-bb98-4852b588dc46
+# Define `extented_box` to enlarge the extent of a Meshes.jl `Box`.
+function extented_box(box::Box)
+
+    # Get min and max corner coordinates.
+    cmin, cmax = coords.(extrema(box))
+
+    # Extract latitude/longitude (assumes geographic coords).
+    lat1, lon1 = (cmin.lat, cmin.lon) .|> ustrip
+    lat2, lon2 = (cmax.lat, cmax.lon) .|> ustrip
+
+    # Compute width (lon) and height (lat).
+    δlon = abs(lon1 - lon2)
+    δlat = abs(lat1 - lat2)
+
+    # Build a larger rectangular extent.
+    extent = Rect2f(lon1 - δlon/2, lat1 - δlat/2, 2δlon, 2δlat)
+
+    return extent
+end
+
+# ╔═╡ cea06d2a-d549-4d4d-a0fa-402a5def8536
+begin
+	# Get bounding box in Lat/Lon (syntax shown here is not valid).
+	box = boundingbox(processed_image.geometry |> Proj(LatLon))
+	
+	# Expand the extent.
+	extent = extented_box(box)
+	
+	# Choose Google Maps tile provider.
+	provider = TileProviders.Google()
+	
+	Tyler.Map(extent; provider)
+
+end
+
+# ╔═╡ 28bbbdb6-2ce5-4bfd-bf00-d6add78c38b9
+# Create map and overlay RGB geometry (reprojection syntax is not correct).
+with_logger(SimpleLogger(stderr, Logging.Error)) do
+    m = Tyler.Map(extent; provider);
+    viz!(processed_image.geometry |> Proj(WebMercator), color = processed_image.RGB)
+    return m
+end
+
+# ╔═╡ 5d73c7a8-d5e0-4da2-b9fb-39e924cb913e
+# Function to convert numerical R, G, B values to the Hue color channel.
+function to_hue(r, g, b)
+    # Create an RGB color object from the numbers.
+    rgb = RGB(r, g, b)
+    # Convert the color from RGB to HSV (Hue, Saturation, Value).
+    hsv = HSV(rgb)
+    # Return only the Hue component.
+    return hsv.h
+end
+
+# ╔═╡ fcad4298-c839-4f8c-9e9f-19dce1ce60a3
+# Apply the `to_hue` function across the `rgb` GeoTable,
+# creating a new column named "HUE" with the results.
+img_hue = img |> Map(["R","G","B"] => to_hue => "HUE")
 
 # ╔═╡ Cell order:
 # ╟─791e27f0-a9f0-11f0-91ec-7b09a9a9c617
@@ -94,3 +195,13 @@ describe(img)
 # ╠═8115b77f-817c-495d-8f9f-4e325b424dae
 # ╠═23bb4bbe-0187-4ac5-bd23-82ea6c50c520
 # ╠═d09bebca-7acf-4cea-b873-067844cd84a9
+# ╠═f696ca04-42bd-4c79-a469-5644fd0574d2
+# ╠═4e7f15bf-74e3-40e5-a66a-1ed4b41cbc7f
+# ╠═2b47670e-46d7-491f-89ab-924599eb136b
+# ╠═b34b67e4-0dd8-453c-a1d6-cef1be0786aa
+# ╠═9519e9fc-2345-4deb-bb98-4852b588dc46
+# ╠═cea06d2a-d549-4d4d-a0fa-402a5def8536
+# ╠═47a5b8b4-11c8-460f-a91e-a6e05f912ea6
+# ╠═28bbbdb6-2ce5-4bfd-bf00-d6add78c38b9
+# ╠═5d73c7a8-d5e0-4da2-b9fb-39e924cb913e
+# ╠═fcad4298-c839-4f8c-9e9f-19dce1ce60a3
